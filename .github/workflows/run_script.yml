@@ -1,4 +1,4 @@
-name: Run Twitter Script
+name: Run Script
 
 on:
   schedule:

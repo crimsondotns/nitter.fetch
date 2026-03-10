@@ -78,7 +78,10 @@ def emoji_for_status(status_code):
 
 
 def log_info(msg):
-    print(f"{now_sgt_str()}\tInfo\t{msg}")
+    print(f"{now_sgt_str()}\tInfo\t{msg}", flush=True)
+
+
+log_info("Script starting... 🚀")
 
 
 # ===============================
@@ -517,7 +520,9 @@ def fetch_user_tweets_last_days(
 def get_twitter_user_stats():
     overall_start = time.perf_counter()
 
+    log_info("Fetching account links from spreadsheet...")
     links = sheet_status.col_values(1)[1:]
+    log_info(f"Found {len(links)} links. Starting processing...")
     results: List[List[str]] = []
 
     for idx, link in enumerate(links, start=2):

@@ -238,12 +238,27 @@ def call_x_with_backoff(url, row_idx=None, max_retries=8, base_sleep=2.0, timeou
                     return resp
 
             if status == 429:
-                sleep_s = 10.0
-                log_info(f"Rate limit (429), retrying in {sleep_s:.0f}s... (Attempt {attempt}/7)", row_idx=row_idx)
+                retry_after = resp.headers.get("Retry-After")
+                reset_epoch = resp.headers.get("x-rate-limit-reset")
+                sleep_s: Optional[float] = None
+                if reset_epoch:
+                    try:
+                        reset_ts = int(reset_epoch)
+                        now_utc = datetime.now(timezone.utc).timestamp()
+                        sleep_s = max(0, math.ceil(reset_ts - now_utc) + 1)
+                    except Exception:
+                        pass
+                if sleep_s is None and retry_after:
+                    try:
+                        sleep_s = max(1, int(float(retry_after)))
+                    except Exception:
+                        pass
+                if sleep_s is None:
+                    sleep_s = min(60 * 5, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+                log_info(f"waiting {sleep_s:.0f}s for rate limit window…", row_idx=row_idx)
                 time.sleep(sleep_s)
-                if attempt >= 7:
-                    log_info("Max 429 retries reached, skipping row.", row_idx=row_idx)
-                    return resp
+                if attempt > max_retries:
+                    raise RuntimeError("Too many rate limit retries.")
                 continue
 
             if attempt <= max_retries and (500 <= status < 600 or status in (408, 409, 425, 502, 503, 504)):
@@ -387,7 +402,7 @@ def fetch_community_member_count(rest_id: str, row_idx: Optional[int] = None) ->
 # ===============================
 # Nitter RSS Helper
 # ===============================
-def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] = None) -> List[Tuple[datetime, str]]:
+def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] = None) -> Tuple[int, List[Tuple[datetime, str]]]:
     """
     ดึงโพสต์จาก Nitter RSS (nitter.net/{username}/rss)
     """
@@ -413,12 +428,12 @@ def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] 
         if status != 200:
             if status == 403:
                 send_telegram_notification(f"<b>403 Forbidden</b> (Nitter RSS)\nURL: {url}\nRow: {row_idx}")
-            return []
+            return status, []
             
         root = ET.fromstring(resp.content)
         channel = root.find("channel")
         if channel is None:
-            return []
+            return status, []
             
         posts: List[Tuple[datetime, str]] = []
         for item in channel.findall("item"):
@@ -439,11 +454,11 @@ def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] 
                     
         # Sort by date descending
         posts.sort(key=lambda x: x[0], reverse=True)
-        return posts
+        return status, posts
         
     except Exception as e:
         log_info(f"Nitter RSS error: {e!s} ❌", row_idx=row_idx)
-        return []
+        return 500, []
 
 
 # ===============================
@@ -600,9 +615,18 @@ def get_twitter_user_recent_posts(days: int = 7):
         try:
             global ENDPOINT_TAG
             old_tag = ENDPOINT_TAG
-            ENDPOINT_TAG = f"NitterRSS:{username}"
+            tweets = []
+            for attempt in range(1, 8):
+                status_nitter, tweets = fetch_nitter_rss_posts(username, days=days, row_idx=idx)
+                if status_nitter == 200:
+                    break
+                if status_nitter == 429 and attempt < 7:
+                    log_info(f"Nitter RSS 429 (Rate Limit), retrying in 10s... (Attempt {attempt}/7)", row_idx=idx)
+                    time.sleep(10)
+                else:
+                    # Not a 429, or exhausted retries
+                    break
             
-            tweets = fetch_nitter_rss_posts(username, days=days, row_idx=idx)
             ENDPOINT_TAG = old_tag
             
             texts = [t[1] for t in tweets]
@@ -671,7 +695,7 @@ def get_twitter_user_recent_posts(days: int = 7):
 # ===============================
 if __name__ == "__main__":
     # เขียน stats ลง Migration (B:C:D)
-    get_twitter_user_stats()
+    # get_twitter_user_stats()
 
     # เขียนโพสต์ย้อนหลัง 30 วันลง Migration (E:...)
-    # get_twitter_user_recent_posts(30)
+    get_twitter_user_recent_posts(30)

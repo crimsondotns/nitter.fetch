@@ -223,6 +223,8 @@ def call_x_with_backoff(url: str, params=None, max_retries=5, base_sleep=2.0, ro
                 continue
 
             if status == 404:
+                readable_url = get_readable_url(url)
+                send_telegram_notification(f"<b>404 Not Found</b> (X API)\nURL: {readable_url}\nRow: {row_idx}")
                 return resp
             
             if status == 429:

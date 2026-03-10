@@ -1,4 +1,4 @@
-name: Run Script
+name: Post
 
 on:
   schedule:

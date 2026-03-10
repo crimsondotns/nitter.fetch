@@ -3,7 +3,7 @@ name: Profile
 on:
   schedule:
     # Sunday at 10:00 UTC (17:00 Bangkok Time)
-    - cron: "0 10 * * 0"
+    - cron: "0 10 */2 * *"
   workflow_dispatch: # Allow manual run
 
 jobs:

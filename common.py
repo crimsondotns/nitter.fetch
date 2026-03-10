@@ -211,7 +211,8 @@ def call_x_with_backoff(url: str, params=None, max_retries=5, base_sleep=2.0, ro
 
             if status == 401 or status == 403:
                 if status == 403 and have_user_auth():
-                    send_telegram_notification(f"<b>403 Forbidden</b> (X API)\nURL: {url}\nRow: {row_idx}\nAttempt: {attempt}/{max_retries}")
+                    readable_url = get_readable_url(url)
+                    send_telegram_notification(f"<b>403 Forbidden</b> (X API)\nURL: {readable_url}\nRow: {row_idx}\nAttempt: {attempt}/{max_retries}")
                 log_info(f"Auth error {status}, attempt {attempt}/{max_retries}")
                 if attempt > max_retries:
                     raise RuntimeError(f"Persistent {status} on {url}. (Cookies banned?)")
@@ -288,4 +289,16 @@ def extract_identifier_from_link(link: str) -> Optional[str]:
 
 def is_rest_id(ident: str) -> bool:
     return bool(re.match(r'^\d+$', ident))
+
+def get_readable_url(api_url: str) -> str:
+    """แปลง URL ของ API (GraphQL) ให้เป็น URL ที่อ่านได้ง่ายสำหรับส่งเข้า Telegram"""
+    if "CommunityQuery" in api_url:
+        m = re.search(r'communityId%22%3A%20%22(\d+)%22', api_url)
+        if m:
+            return f"https://x.com/i/communities/{m.group(1)}"
+    elif "UserByScreenName" in api_url:
+        m = re.search(r'screen_name%22%3A%20%22([^%]+)%22', api_url)
+        if m:
+            return f"https://x.com/{m.group(1)}"
+    return api_url
 

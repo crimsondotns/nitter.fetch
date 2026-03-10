@@ -1,0 +1,33 @@
+name: Run Script
+
+on:
+  schedule:
+    # Sunday at 13:00 UTC (20:00 Bangkok Time)
+    - cron: "0 13 * * 0"
+  workflow_dispatch: # Allow manual run
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          pip install gspread google-auth requests
+
+      - name: Run script
+        env:
+          SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
+          X_BEARER: ${{ secrets.X_BEARER }}
+          X_COOKIE_STRING: ${{ secrets.X_COOKIE_STRING }}
+          X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
+          X_CT0: ${{ secrets.X_CT0 }}
+          X_GUEST_TOKEN: ${{ secrets.X_GUEST_TOKEN }}
+        run: python xml.py

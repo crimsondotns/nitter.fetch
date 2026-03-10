@@ -77,8 +77,10 @@ def emoji_for_status(status_code):
     return "❌"
 
 
-def log_info(msg):
-    print(f"{now_sgt_str()}\tInfo\t{msg}", flush=True)
+def log_info(msg, row_idx=None):
+    ts = now_sgt_str()
+    row_part = f"Row {row_idx} " if row_idx is not None else ""
+    print(f"{ts}\n{row_part}Info\t[{ENDPOINT_TAG}] {msg}", flush=True)
 
 
 log_info("Script starting... 🚀")
@@ -158,7 +160,7 @@ def refresh_guest_token() -> str:
 # ===============================
 # BACKOFF WRAPPER
 # ===============================
-def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
+def call_x_with_backoff(url, row_idx=None, max_retries=8, base_sleep=2.0, timeout=20):
     attempt = 0
     guest_refreshed = False
     while True:
@@ -168,7 +170,7 @@ def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
             resp = session.get(url, timeout=timeout)
             dur_ms = int((time.perf_counter() - start) * 1000)
             status = resp.status_code
-            log_info(f"[{ENDPOINT_TAG}] {dur_ms}ms, status={status} {emoji_for_status(status)}")
+            log_info(f"{dur_ms}ms, status={status} {emoji_for_status(status)}", row_idx=row_idx)
 
             if status == 200:
                 return resp
@@ -185,7 +187,7 @@ def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
                     guest_refreshed = True
                     continue
                 except Exception as e:
-                    log_info(f"guest token refresh error: {e!s} ❌")
+                    log_info(f"guest token refresh error: {e!s} ❌", row_idx=row_idx)
                     return resp
 
             if status == 429:
@@ -206,7 +208,7 @@ def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
                         pass
                 if sleep_s is None:
                     sleep_s = min(60 * 5, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
-                log_info(f"waiting {sleep_s:.0f}s for rate limit window…")
+                log_info(f"waiting {sleep_s:.0f}s for rate limit window…", row_idx=row_idx)
                 time.sleep(sleep_s)
                 if attempt > max_retries:
                     raise RuntimeError("Too many rate limit retries.")
@@ -214,7 +216,7 @@ def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
 
             if attempt <= max_retries and (500 <= status < 600 or status in (408, 409, 425, 502, 503, 504)):
                 sleep_s = min(60, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 0.5)
-                log_info(f"transient error {status}, retrying in {sleep_s:.1f}s…")
+                log_info(f"transient error {status}, retrying in {sleep_s:.1f}s…", row_idx=row_idx)
                 time.sleep(sleep_s)
                 continue
 
@@ -222,10 +224,10 @@ def call_x_with_backoff(url, max_retries=8, base_sleep=2.0, timeout=20):
 
         except requests.RequestException as e:
             dur_ms = int((time.perf_counter() - start) * 1000)
-            log_info(f"[{ENDPOINT_TAG}] {dur_ms}ms, network error: {e!s} ❌")
+            log_info(f"{dur_ms}ms, network error: {e!s} ❌", row_idx=row_idx)
             if attempt <= max_retries:
                 sleep_s = min(60, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 0.5)
-                log_info(f"retrying in {sleep_s:.1f}s…")
+                log_info(f"retrying in {sleep_s:.1f}s…", row_idx=row_idx)
                 time.sleep(sleep_s)
                 continue
             raise
@@ -304,7 +306,7 @@ def deep_find_member_count(obj):
     return None
 
 
-def fetch_community_member_count(rest_id: str) -> Tuple[int, int]:
+def fetch_community_member_count(rest_id: str, row_idx: Optional[int] = None) -> Tuple[int, int]:
     variables = {"communityId": rest_id}
     features = {
         "c9s_list_members_action_api_enabled": False,
@@ -327,16 +329,16 @@ def fetch_community_member_count(rest_id: str) -> Tuple[int, int]:
                 try:
                     refresh_guest_token()
                 except Exception as e:
-                    log_info(f"initial guest token error: {e!s} ❌")
+                    log_info(f"initial guest token error: {e!s} ❌", row_idx=row_idx)
 
-        resp = call_x_with_backoff(url)
+        resp = call_x_with_backoff(url, row_idx=row_idx)
         status = resp.status_code
 
         if status == 403 and have_user_auth():
             if enable_user_auth_on_session():
                 resp = session.get(url, timeout=20)
                 status = resp.status_code
-                log_info(f"[CommunityQuery retry user] status={status} {emoji_for_status(status)}")
+                log_info(f"[retry user] status={status} {emoji_for_status(status)}", row_idx=row_idx)
 
         if status == 200:
             data = resp.json()
@@ -427,11 +429,12 @@ def extract_tweets_from_usertweets(
 
 def fetch_user_tweets_last_days(
     user_id: str,
+    row_idx: Optional[int] = None,
     days: int = 7,
     max_count: int = 100
 ) -> Tuple[int, List[Tuple[datetime, str]]]:
     cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
-    log_info(f"fetch_user_tweets_last_days: user_id={user_id}, days={days}, cutoff_utc={cutoff_dt.isoformat()}")
+    log_info(f"fetch_user_tweets_last_days: user_id={user_id}, days={days}, cutoff_utc={cutoff_dt.isoformat()}", row_idx=row_idx)
 
     variables = {
         "userId": user_id,
@@ -500,9 +503,9 @@ def fetch_user_tweets_last_days(
                 try:
                     refresh_guest_token()
                 except Exception as e:
-                    log_info(f"initial guest token error: {e!s} ❌")
+                    log_info(f"initial guest token error: {e!s} ❌", row_idx=row_idx)
 
-        resp = call_x_with_backoff(url)
+        resp = call_x_with_backoff(url, row_idx=row_idx)
         status = resp.status_code
         if status == 200:
             data = resp.json()
@@ -534,7 +537,7 @@ def get_twitter_user_stats():
         # ถ้าเป็นเลขยาว → communityId
         if is_rest_id(ident):
             try:
-                status, member_count = fetch_community_member_count(ident)
+                status, member_count = fetch_community_member_count(ident, row_idx=idx)
                 if status == 200 and member_count >= 0:
                     # B = communityId, C = "", D = member_count
                     results.append([ident, "", str(member_count)])
@@ -543,7 +546,7 @@ def get_twitter_user_stats():
                 else:
                     results.append([ident, "", f"status={status}"])
             except Exception as e:
-                log_info(f"Error (Community) at row {idx}: {e!s}")
+                log_info(f"Error (Community) at row {idx}: {e!s}", row_idx=idx)
                 results.append([ident, "", "ERROR"])
             continue
 
@@ -580,9 +583,9 @@ def get_twitter_user_stats():
 
         global ENDPOINT_TAG
         old_tag = ENDPOINT_TAG
-        ENDPOINT_TAG = "UserByScreenName"
+        ENDPOINT_TAG = screen_name
         try:
-            resp = call_x_with_backoff(url)
+            resp = call_x_with_backoff(url, row_idx=idx)
             status = resp.status_code
             if status == 200:
                 data = resp.json()
@@ -601,7 +604,7 @@ def get_twitter_user_stats():
             else:
                 results.append([screen_name, f"status={status}", f"status={status}"])
         except Exception as e:
-            log_info(f"Error (UserByScreenName) at row {idx}: {e!s}")
+            log_info(f"Error (UserByScreenName) at row {idx}: {e!s}", row_idx=idx)
             results.append([screen_name, "ERROR", "ERROR"])
         finally:
             ENDPOINT_TAG = old_tag
@@ -648,18 +651,18 @@ def get_twitter_user_recent_posts(days: int = 7):
         ident_raw = extract_identifier_from_link(link or "")
         if not ident_raw:
             accounts_empty_link += 1
-            log_info(f"row={idx} link ว่าง / parse ไม่ได้ → ข้าม")
+            log_info(f"row={idx} link ว่าง / parse ไม่ได้ → ข้าม", row_idx=idx)
             all_rows.append([""])
             continue
 
         if is_rest_id(ident_raw):
             rest_id = ident_raw
             screen_name_for_sheet = ident_raw  # ชื่อแถวมีอยู่แล้วในคอลัมน์ B จาก stats
-            log_info(f"row={idx} ใช้ค่าจากลิงก์เป็น userId โดยตรง: userId={rest_id}")
+            log_info(f"ใช้ค่าจากลิงก์เป็น userId โดยตรง: userId={rest_id}", row_idx=idx)
         else:
             screen_name = ident_raw.lstrip("@")
             screen_name_for_sheet = screen_name
-            log_info(f"row={idx} เริ่ม lookup UserByScreenName สำหรับ @{screen_name}")
+            log_info(f"เริ่ม lookup UserByScreenName สำหรับ @{screen_name}", row_idx=idx)
 
             variables = {
                 "screen_name": screen_name,
@@ -692,14 +695,14 @@ def get_twitter_user_recent_posts(days: int = 7):
 
             global ENDPOINT_TAG
             old_tag = ENDPOINT_TAG
-            ENDPOINT_TAG = "UserByScreenName"
+            ENDPOINT_TAG = screen_name
 
             try:
-                resp = call_x_with_backoff(url)
+                resp = call_x_with_backoff(url, row_idx=idx)
                 status = resp.status_code
                 if status != 200:
                     accounts_user_lookup_err += 1
-                    log_info(f"row={idx} UserByScreenName status={status} ❌")
+                    log_info(f"UserByScreenName status={status} ❌", row_idx=idx)
                     all_rows.append([f"status={status}"])
                     ENDPOINT_TAG = old_tag
                     continue
@@ -710,16 +713,16 @@ def get_twitter_user_recent_posts(days: int = 7):
                 rest_id = user_result.get("rest_id") or (user_result.get("result", {}) or {}).get("rest_id")
                 if not rest_id:
                     accounts_no_user_id += 1
-                    log_info(f"row={idx} ไม่พบ rest_id ใน UserByScreenName result ❌")
+                    log_info(f"ไม่พบ rest_id ใน UserByScreenName result ❌", row_idx=idx)
                     all_rows.append(["NO_USER_ID"])
                     ENDPOINT_TAG = old_tag
                     continue
 
-                log_info(f"row={idx} ได้ userId={rest_id} สำหรับ @{screen_name}")
+                log_info(f"ได้ userId={rest_id} สำหรับ @{screen_name}", row_idx=idx)
 
             except Exception as e:
                 accounts_user_lookup_err += 1
-                log_info(f"row={idx} Error (UserByScreenName): {e!s} ❌")
+                log_info(f"Error (UserByScreenName): {e!s} ❌", row_idx=idx)
                 all_rows.append(["ERROR_USER_LOOKUP"])
                 ENDPOINT_TAG = old_tag
                 continue
@@ -727,11 +730,11 @@ def get_twitter_user_recent_posts(days: int = 7):
                 ENDPOINT_TAG = "UserByScreenName"
 
         try:
-            log_info(f"row={idx} เรียก UserTweets สำหรับ userId={rest_id}")
-            status2, tweets = fetch_user_tweets_last_days(rest_id, days=days, max_count=100)
+            log_info(f"เรียก UserTweets สำหรับ userId={rest_id}", row_idx=idx)
+            status2, tweets = fetch_user_tweets_last_days(rest_id, row_idx=idx, days=days, max_count=100)
             if status2 != 200:
                 accounts_tweets_api_err += 1
-                log_info(f"row={idx} UserTweets status={status2} ❌")
+                log_info(f"UserTweets status={status2} ❌", row_idx=idx)
                 all_rows.append([f"tweets_status={status2}"])
                 continue
 
@@ -741,19 +744,20 @@ def get_twitter_user_recent_posts(days: int = 7):
 
             if tweet_count == 0:
                 accounts_zero_tweets_nd += 1
-                log_info(f"row={idx} user={screen_name_for_sheet}, tweets_{days}d=0 (ไม่มีโพสต์ในช่วง {days} วัน)")
+                log_info(f"user={screen_name_for_sheet}, tweets_{days}d=0 (ไม่มีโพสต์ในช่วง {days} วัน)", row_idx=idx)
             else:
                 accounts_with_tweets_nd += 1
                 newest_dt = tweets[0][0].astimezone(SGT)
                 oldest_dt = tweets[-1][0].astimezone(SGT)
                 log_info(
-                    f"row={idx} user={screen_name_for_sheet}, tweets_{days}d={tweet_count}, "
-                    f"newest_SGT={newest_dt.isoformat()}, oldest_SGT={oldest_dt.isoformat()}"
+                    f"user={screen_name_for_sheet}, tweets_{days}d={tweet_count}, "
+                    f"newest_SGT={newest_dt.isoformat()}, oldest_SGT={oldest_dt.isoformat()}",
+                    row_idx=idx
                 )
                 snippet = texts[0].replace("\n", " ")
                 if len(snippet) > 80:
                     snippet = snippet[:77] + "..."
-                log_info(f"row={idx} ตัวอย่างโพสต์ล่าสุด: {snippet}")
+                log_info(f"ตัวอย่างโพสต์ล่าสุด: {snippet}", row_idx=idx)
 
             # เขียนเฉพาะโพสต์ลงคอลัมน์ E,F,G,... (ไม่ต้องเขียน username ซ้ำ)
             row = texts if texts else [""]
@@ -762,7 +766,7 @@ def get_twitter_user_recent_posts(days: int = 7):
 
         except Exception as e:
             accounts_tweets_api_err += 1
-            log_info(f"row={idx} Error (UserTweets): {e!s} ❌")
+            log_info(f"Error (UserTweets): {e!s} ❌", row_idx=idx)
             all_rows.append(["ERROR_TWEETS"])
             continue
 

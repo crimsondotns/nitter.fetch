@@ -806,7 +806,7 @@ def get_twitter_user_recent_posts(days: int = 7):
 # ===============================
 if __name__ == "__main__":
     # เขียน stats ลง Migration (B:C:D)
-     get_twitter_user_stats()
+    get_twitter_user_stats()
 
     # เขียนโพสต์ย้อนหลัง 30 วันลง Migration (E:...)
-     get_twitter_user_recent_posts(30)
+    # get_twitter_user_recent_posts(30)

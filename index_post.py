@@ -28,8 +28,11 @@ def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] 
         common.log_info("", row_idx=row_idx, status_code=colored_status, method="GET", path=path)
         
         if status != 200:
+            readable_url = f"https://x.com/{username}"
             if status == 403:
-                common.send_telegram_notification(f"<b>403 Forbidden</b> (Nitter RSS)\nURL: {url}\nRow: {row_idx}")
+                common.send_telegram_notification(f"<b>403 Forbidden</b> (Nitter RSS)\nURL: {readable_url}\nRow: {row_idx}")
+            elif status == 404:
+                common.send_telegram_notification(f"<b>404 Not Found</b> (Nitter RSS)\nURL: {readable_url}\nRow: {row_idx}")
             return status, []
             
         root = ET.fromstring(resp.content)

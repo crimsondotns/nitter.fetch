@@ -52,7 +52,7 @@ client = gspread.authorize(creds)
 
 SPREADSHEET_ID = "1xKU6PB6PaPBmq6wHkW6cEM3PDDu6LWzZjlnHJp0Mvqo"
 SHEET_NAME_STATUS = "Twitter(X) User Stat"
-SHEET_NAME_MIGRATION = "Copy of Migration"
+SHEET_NAME_MIGRATION = "Migration"
 
 sheet_status = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_STATUS)
 sheet_migration = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_MIGRATION)
@@ -110,7 +110,7 @@ def emoji_for_status(status_code):
 def log_info(msg, row_idx=None, status_code=None, method=None, path=None):
     ts = now_sgt_str()
     if method and path:
-        row_str = f" ROW{row_idx}" if row_idx is not None else ""
+        row_str = f" Row: {row_idx}" if row_idx is not None else ""
         st = f" {status_code}" if status_code else ""
         print(f"{ts} \"{method}{row_str} {path}\"{st} {msg}", flush=True)
     else:

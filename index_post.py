@@ -6,6 +6,7 @@ import re
 import os
 import json
 import random
+import gspread
 import common
 
 NITTER_INSTANCES = [
@@ -30,6 +31,44 @@ def get_nitter_instances() -> List[str]:
         common.log_info(f"Failed to fetch dynamic nitter instances: {e!s}")
     return NITTER_INSTANCES
 
+def log_error_to_sheet(error_msg: str, row_idx: str, instance: str):
+    try:
+        sh = common.client.open_by_key(common.SPREADSHEET_ID)
+        try:
+            error_sheet = sh.worksheet("error.log")
+        except gspread.exceptions.WorksheetNotFound:
+            error_sheet = sh.add_worksheet(title="error.log", rows=1000, cols=4)
+            error_sheet.append_row(["Timestamp", "Row", "Instance", "Error Message"])
+        
+        ts = datetime.now(common.SGT).strftime("%Y-%m-%d %H:%M:%S")
+        error_sheet.append_row([ts, str(row_idx), instance, error_msg])
+    except Exception as e:
+        common.log_info(f"Failed to write to error.log sheet: {e!s}")
+
+def print_custom_log(status: int, username: str):
+    ts = datetime.now(common.SGT).strftime("[%a, %d %b %y %H:%M]")
+    
+    if status == 200:
+        c_status = f"\033[92m{status}\033[0m"
+        msg = f"ดำเนินการเสร็จสิ้น - ดึงข้อมูล @{username} สำเร็จ"
+    elif status == 404:
+        c_status = f"\033[91m{status}\033[0m"
+        msg = f"ข้อผิดพลาดภายนอก - ไม่พบข้อมูลบัญชีผู้ใช้ที่ระบุ"
+    elif status >= 500:
+        c_status = f"\033[91m{status}\033[0m"
+        msg = f"ข้อผิดพลาดระบบ - เซิร์ฟเวอร์ตอบสนองไม่ถูกต้อง (Internal Error)"
+    elif status == 429:
+        c_status = f"\033[93m{status}\033[0m"
+        msg = f"ข้อผิดพลาดระบบ - ถูกจำกัดการเข้าถึง (Rate Limit)"
+    elif status == 403:
+        c_status = f"\033[91m{status}\033[0m"
+        msg = f"ข้อผิดพลาดภายนอก - ถูกปฏิเสธการเข้าถึง (Forbidden)"
+    else:
+        c_status = f"\033[93m{status}\033[0m"
+        msg = f"สถานะ - เกิดข้อผิดพลาดรหัส {status}"
+        
+    print(f"{ts} [STATUS {c_status}] : {msg}", flush=True)
+
 def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] = None, instance: str = "nitter.net") -> Tuple[int, List[Tuple[datetime, str]]]:
     """
     ดึงโพสต์จาก Nitter RSS
@@ -43,22 +82,12 @@ def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] 
         resp = common.session.get(url, timeout=30)
         status = resp.status_code
         
-        # Colorize status code
-        if status == 200:
-            colored_status = f"\033[92m{status}\033[0m"
-        elif status == 429:
-            colored_status = f"\033[93m{status}\033[0m"
-        else:
-            colored_status = f"\033[91m{status}\033[0m"
-        
-        common.log_info("", row_idx=row_idx, status_code=colored_status, method="GET", path=path)
-        
         if status != 200:
             readable_url = f"https://x.com/{username}"
             if status == 403:
-                common.send_telegram_notification(f"<b>403 Forbidden</b> (Nitter RSS)\nURL: {readable_url}\nRow: {row_idx}\nInstance: {instance}")
+                log_error_to_sheet(f"403 Forbidden (Nitter RSS) - {readable_url}", str(row_idx), instance)
             elif status == 404:
-                common.send_telegram_notification(f"<b>404 Not Found</b> (Nitter RSS)\nURL: {readable_url}\nRow: {row_idx}\nInstance: {instance}")
+                log_error_to_sheet(f"404 Not Found (Nitter RSS) - {readable_url}", str(row_idx), instance)
             return status, []
             
         root = ET.fromstring(resp.content)
@@ -96,19 +125,18 @@ def fetch_nitter_rss_posts(username: str, days: int = 7, row_idx: Optional[int] 
         return status, posts
         
     except Exception as e:
-        common.log_info(f"Nitter RSS error: {e!s} ❌ ({instance})", row_idx=row_idx)
+        log_error_to_sheet(f"Nitter RSS error: {e!s}", str(row_idx), instance)
         return 500, []
 
-def save_progress_state(state_file: str, date_str: str, last_row: int, finished: bool):
+def save_progress_state(state_file: str, date_str: str, processed_users: List[str]):
     try:
         new_state = {
             "date": date_str,
-            "last_row_processed": last_row,
-            "finished": finished
+            "processed_users": processed_users
         }
         with open(state_file, "w") as f:
             json.dump(new_state, f)
-        common.log_info(f"Saved state to {state_file}: {new_state} ✅")
+        common.log_info(f"Saved state to {state_file} 📝 ({len(processed_users)} users completed today)")
     except Exception as e:
         common.log_info(f"Error saving state: {e!s}")
 
@@ -118,15 +146,17 @@ def get_twitter_user_recent_posts(days: int = 7):
     STATE_FILE = "nitter_progress.json"
     state = {}
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    start_index = 2 # Sheet row 2
+    processed_today: List[str] = []
     
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 state = json.load(f)
-            if state.get("date") == today_str and not state.get("finished", False):
-                start_index = int(state.get("last_row_processed", 1)) + 1
-                common.log_info(f"Resume run detected for {today_str}. Starting from sheet row {start_index} 🚀")
+            if state.get("date") == today_str:
+                processed_today = list(state.get("processed_users", []))
+                common.log_info(f"Resume run detected for {today_str}. Skiping {len(processed_today)} users already processed 🚀")
+            else:
+                common.log_info(f"New day detected ({today_str}). Starting fresh! ☀️")
         except Exception as e:
             common.log_info(f"Error loading state: {e!s}")
 
@@ -138,7 +168,9 @@ def get_twitter_user_recent_posts(days: int = 7):
     instances = get_nitter_instances()
     common.log_info(f"Nitter instances ready: {len(instances)} instances.")
 
-    all_rows: List[List[str]] = []
+    # Cache original rows in case they move during execution
+    # But later we fetch the freshest rows right before batch_update!
+    session_results: List[Tuple[str, List[str]]] = []
     max_tweets = 0
 
     accounts_empty_link = 0
@@ -148,24 +180,9 @@ def get_twitter_user_recent_posts(days: int = 7):
     consecutive_errors = 0
     MAX_CONSECUTIVE_ERRORS = 5
 
-    # If fresh start, clear sheet
-    if start_index == 2:
-        end_row = len(links) + 1 # Clear up to the length of items
-        clear_range = f"E2:ZZ{end_row}"
-        try:
-            common.sheet_migration.batch_clear([clear_range])
-            common.log_info(f"cleared range {clear_range} ✅ (Fresh Start)")
-        except Exception as e:
-            common.log_info(f"Error clearing range: {e!s}")
-    else:
-        # Prevent starting beyond the end
-        if start_index > len(links):
-            common.log_info("All rows already processed. Exiting.")
-            return
-
-    # Process chunks from start_index
-    for idx_zero_based in range(start_index - 1, len(links)):
-        idx = idx_zero_based + 1 # sheet row
+    idx_start = 2
+    for idx_zero_based in range(idx_start - 1, len(links)):
+        idx = idx_zero_based + 1 # original sheet row
         link = links[idx_zero_based]
         
         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
@@ -176,13 +193,16 @@ def get_twitter_user_recent_posts(days: int = 7):
         if not ident_raw:
             accounts_empty_link += 1
             common.log_info(f"row={idx} link ว่าง / parse ไม่ได้ → ข้าม", row_idx=idx)
-            all_rows.append([""])
             continue
 
         username = ident_raw.lstrip("@")
         if common.is_rest_id(username):
             common.log_info(f"skipping rest_id ident '{username}' — RSS needs screen_name", row_idx=idx)
-            all_rows.append(["RSS_REQUIRES_SCREEN_NAME"])
+            continue
+            
+        # Check if already processed today
+        if username.lower() in [u.lower() for u in processed_today]:
+            common.log_info(f"ข้าม @{username} (ดึงไปแล้วในวันนี้)", row_idx=idx)
             continue
 
         try:
@@ -205,12 +225,14 @@ def get_twitter_user_recent_posts(days: int = 7):
                         common.log_info(f"Instance {instance} failed ({status_nitter}), retrying... (Attempt {attempt}/{attempts})", row_idx=idx)
                         time.sleep(2)
                 else:
-                    # 404 or 403, unlikely to be solved by rotation
                     consecutive_errors = 0
                     break
             
             if not success and status_nitter not in [200, 404, 403]:
                 consecutive_errors += 1
+            
+            # Print our custom log once per user mapping to the final status
+            print_custom_log(status_nitter, username)
             
             common.ENDPOINT_TAG = old_tag
             
@@ -218,46 +240,61 @@ def get_twitter_user_recent_posts(days: int = 7):
             tweet_count = len(texts)
             total_tweets_nd += tweet_count
 
-            row = texts if texts else [""]
-            all_rows.append(row)
-            max_tweets = max(max_tweets, len(row))
+            session_results.append((username, texts))
+            max_tweets = max(max_tweets, len(texts))
 
             time.sleep(1.5) # Anti-rate limit delay
 
         except Exception as e:
             accounts_tweets_api_err += 1
-            common.log_info(f"Error (NitterRSS): {e!s} ❌", row_idx=idx)
-            all_rows.append(["ERROR_NITTER_RSS"])
+            print_custom_log(500, username)
+            log_error_to_sheet(f"Exception: {e!s}", str(idx), "Local")
             consecutive_errors += 1
             continue
 
     # Writing Phase (Only for exactly what was processed in this run)
-    processed_count = len(all_rows)
+    processed_count = len(session_results)
     if processed_count > 0:
-        target_len = max_tweets if max_tweets > 0 else 1
-        normalized_rows: List[List[str]] = []
-        for row in all_rows:
-            padded = row + [""] * (target_len - len(row))
-            normalized_rows.append(padded)
+        common.log_info("Preparing to sync and write data to sheet...")
+        # Get freshest mapping of usernames to rows in case someone sorted the sheet!
+        fresh_links = common.sheet_migration.col_values(1)
+        fresh_map = {}
+        for f_idx, f_link in enumerate(fresh_links, start=1):
+            f_ident = common.extract_identifier_from_link(f_link or "")
+            if f_ident:
+                f_username = f_ident.lstrip("@").lower()
+                fresh_map[f_username] = f_idx
 
-        write_range = f"E{start_index}"
-        try:
-            common.sheet_migration.update(
-                values=normalized_rows,
-                range_name=write_range,
-                value_input_option="RAW"
-            )
-            common.log_info(f"wrote {processed_count} rows starting at {write_range} ✅")
-        except Exception as e:
-            common.log_info(f"sheet write error: {e!s} ❌")
-            raise
-
-        last_processed = start_index + processed_count - 1
-        # It's finished if we processed the very last item in the list and didn't crash
-        # If we exited due to MAX_CONSECUTIVE_ERRORS, consecutive_errors will be >= max
-        is_finished = (last_processed >= len(links)) and (consecutive_errors < MAX_CONSECUTIVE_ERRORS)
+        # Pad with empty strings to overwrite old data (at least 100 columns)
+        target_len = max(max_tweets, 100)
         
-        save_progress_state(STATE_FILE, today_str, last_processed, is_finished)
+        batch_updates = []
+        successful_users_this_run = []
+        
+        for username, texts in session_results:
+            row_idx = fresh_map.get(username.lower())
+            if row_idx:
+                padded = texts + [""] * (target_len - len(texts))
+                batch_updates.append({
+                    "range": f"E{row_idx}:ZZ{row_idx}",
+                    "values": [padded]
+                })
+                successful_users_this_run.append(username)
+            else:
+                common.log_info(f"Warning: @{username} was removed from the sheet during execution, cannot write its data.")
+        
+        if batch_updates:
+            try:
+                common.sheet_migration.batch_update(batch_updates, value_input_option="RAW")
+                common.log_info(f"Batch wrote {len(batch_updates)} synced rows ✅")
+                
+                # Expand processed valid users
+                processed_today.extend(successful_users_this_run)
+                save_progress_state(STATE_FILE, today_str, processed_today)
+                
+            except Exception as e:
+                common.log_info(f"sheet write error: {e!s} ❌")
+                raise
     else:
         common.log_info("No rows processed in this run.")
 

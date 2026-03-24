@@ -2,8 +2,8 @@ name: Post
 
 on:
   schedule:
-    # Sunday at 13:00 UTC (20:00 Bangkok Time)
-    - cron: "0 13 */2 * *"
+    # 13:00 UTC (20:00 Bangkok Time) every day
+    - cron: "0 13 * * *"
   workflow_dispatch: # Allow manual run
 
 jobs:

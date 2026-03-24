@@ -83,9 +83,9 @@ def get_twitter_user_recent_posts(days: int = 30):
 
     daily_errors: Dict[str, dict] = {}
 
-    raw_engagement_data = common.sheet_engagement.get("B4:G")
+    raw_engagement_data = common.sheet_engagement.get("B5:G")
     engagement_rows = []
-    for f_idx, row in enumerate(raw_engagement_data, start=4):
+    for f_idx, row in enumerate(raw_engagement_data, start=5):
         padded_row = row + [""] * (6 - len(row))
         engagement_rows.append((f_idx, padded_row))
 
@@ -237,6 +237,14 @@ def get_twitter_user_recent_posts(days: int = 30):
             except Exception as e:
                 common.log_info(f"[ERROR] [SYNC] Sheet write error: {e!s}")
                 raise
+
+        # Write final completion timestamp to G1
+        final_ts = datetime.now(common.SGT).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            common.sheet_migration.update(values=[[final_ts]], range_name="G1", value_input_option="RAW")
+            common.log_info(f"[INFO]  [SYNC] Final timestamp written: {final_ts}")
+        except Exception as e:
+            common.log_info(f"[ERROR] [SYNC] Failed to write timestamp: {e!s}")
 
     try:
         sh = common.client.open_by_key(common.SPREADSHEET_ID)

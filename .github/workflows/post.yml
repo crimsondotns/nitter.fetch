@@ -22,6 +22,14 @@ jobs:
         run: |
           pip install gspread google-auth requests
 
+      - name: Restore progress
+        uses: actions/cache/restore@v4
+        with:
+          path: nitter_progress.json
+          key: progress-${{ github.workflow }}-${{ github.run_id }}
+          restore-keys: |
+            progress-${{ github.workflow }}-
+
       - name: Run script
         env:
           SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
@@ -33,3 +41,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python index_post.py
+
+      - name: Save progress
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: nitter_progress.json
+          key: progress-${{ github.workflow }}-${{ github.run_id }}-${{ github.run_attempt }}

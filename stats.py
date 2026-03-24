@@ -210,8 +210,8 @@ def get_twitter_user_stats():
             stats_output = [posts_val, followers_val]
             session_results.append((ident, row_data, stats_output))
             
-            # Anti-ban delay between accounts
-            time.sleep(random.uniform(1.5, 3.0))
+            # Anti-ban delay between accounts (Stealth Mode: 5-10s)
+            time.sleep(random.uniform(5.0, 10.0))
 
         except Exception as e:
             common.log_error(f"Exception at row {idx}: {e!s}", context=ctx)

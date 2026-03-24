@@ -210,7 +210,7 @@ def call_x_with_backoff(url: str, params=None, max_retries=5, base_sleep=2.0, ro
             resp = session.get(url, params=params, timeout=10)
             status = resp.status_code
             
-            log_info(f"[INFO]  [NET] GET {ENDPOINT_TAG} | Row {row_idx} | Status {status} | {resp.elapsed.total_seconds()*1000:.0f}ms")
+            log_info(f"[INFO]  [NET] GET {ENDPOINT_TAG} | Row \033[33m{row_idx}\033[0m (Compiled in : \033[90m{resp.elapsed.total_seconds()*1000:.0f}ms\033[0m)")
 
             if status in (200, 400):
                 return resp

@@ -68,15 +68,15 @@ def get_recent_tweets_nitter(username: str, nitter_instances: List[str], days: i
 # Redirect old print_custom_log to new logger if needed, but better to call directly
 def log_http_status(status: int, username: str, context: str = ""):
     if status == 200:
-        common.log_success(f"HTTP 200 | Successfully fetched posts", context=context)
+        common.log_success(f"HTTP \033[92m200\033[0m | Successfully fetched posts", context=context)
     elif status == 403:
-        common.log_error(f"HTTP 403 | Forbidden access", context=context)
+        common.log_error(f"HTTP \033[91m403\033[0m | Forbidden access", context=context)
     elif status == 404:
-        common.log_error(f"HTTP 404 | User not found", context=context)
+        common.log_error(f"HTTP \033[91m404\033[0m | User not found", context=context)
     elif status == 429:
-        common.log_warn(f"HTTP 429 | Rate limit exceeded", context=context)
+        common.log_warn(f"HTTP \033[93m429\033[0m | Rate limit exceeded", context=context)
     else:
-        common.log_error(f"HTTP {status} | Error fetching posts", context=context)
+        common.log_error(f"HTTP \033[91m{status}\033[0m | Error fetching posts", context=context)
 
 def get_twitter_user_recent_posts(days: int = 30):
     overall_start = time.perf_counter()

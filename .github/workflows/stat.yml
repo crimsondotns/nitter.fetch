@@ -1,9 +1,9 @@
-name: Profile
+name: Stats
 
 on:
   schedule:
-    # Sunday at 10:00 UTC (17:00 Bangkok Time)
-    - cron: "0 10 */2 * *"
+    # 00:00 UTC (07:00 Bangkok Time) every day
+    - cron: "0 0 * * *"
   workflow_dispatch: # Allow manual run
 
 jobs:
@@ -32,4 +32,4 @@ jobs:
           X_GUEST_TOKEN: ${{ secrets.X_GUEST_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python index_profile.py
+        run: python stats.py

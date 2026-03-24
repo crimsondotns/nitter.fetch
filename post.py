@@ -179,8 +179,8 @@ def get_twitter_user_recent_posts(days: int = 30):
             
             session_results.append((username, row_data, texts))
             
-            # Anti-ban delay between accounts (Stealth Mode: 10-20s)
-            time.sleep(random.uniform(10.0, 20.0))
+            # Anti-ban delay between accounts (Stealth Mode: 5-10s)
+            time.sleep(random.uniform(5.0, 10.0))
 
         except Exception as e:
             common.log_error(f"Exception at row {idx}: {e!s}", context=ctx)

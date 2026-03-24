@@ -10,7 +10,6 @@ import common
 
 NITTER_INSTANCES = [
     "nitter.net",
-    "xcancel.com",
     "nitter.privacydev.net"
 ]
 

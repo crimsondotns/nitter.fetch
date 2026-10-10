@@ -1,12 +1,12 @@
-name: Posts
+name: Stats
 
 on:
   schedule:
-    - cron: "0 0 * * *" # 00:00 UTC (07:00 Bangkok Time)
+    - cron: "30 0 * * *" # 00:30 UTC (07:30 Bangkok Time)
   workflow_dispatch:
 
 jobs:
-  fetch-posts:
+  fetch-stats:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +18,11 @@ jobs:
       - name: Install dependencies
         run: pip install gspread google-auth requests
 
-      - name: Fetch recent posts
+      - name: Fetch user stats
         env:
           SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
           X_BEARER: ${{ secrets.X_BEARER }}
           X_COOKIE_STRING: ${{ secrets.X_COOKIE_STRING }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
           X_CT0: ${{ secrets.X_CT0 }}
-        run: python post.py
+        run: python fetch_stats.py

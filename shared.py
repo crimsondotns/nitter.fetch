@@ -4,7 +4,6 @@ import json
 import time
 import math
 import random
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, Dict, List
 
@@ -58,9 +57,9 @@ _RETRYABLE_SERVER_CODES = frozenset(range(500, 600)) | {408, 409, 425}
 
 # --- Google Sheets ---
 SPREADSHEET_ID         = "1xKU6PB6PaPBmq6wHkW6cEM3PDDu6LWzZjlnHJp0Mvqo"
-SHEET_NAME_MIGRATION   = "Migration"
+SHEET_NAME_POSTS       = "Recent_Posts"
 SHEET_NAME_ENGAGEMENT  = "Engagement"
-SHEET_NAME_USER_ON_X   = "User_on_X"
+SHEET_NAME_STATS       = "Account_Stats"
 
 # --- Community Query ---
 COMMUNITY_QUERY_FEATURES = {
@@ -90,9 +89,9 @@ _creds       = Credentials.from_service_account_info(
 client       = gspread.authorize(_creds)
 _spreadsheet = client.open_by_key(SPREADSHEET_ID)
 
-sheet_migration  = _spreadsheet.worksheet(SHEET_NAME_MIGRATION)
+sheet_posts      = _spreadsheet.worksheet(SHEET_NAME_POSTS)
 sheet_engagement = _spreadsheet.worksheet(SHEET_NAME_ENGAGEMENT)
-sheet_user_on_x  = _spreadsheet.worksheet(SHEET_NAME_USER_ON_X)
+sheet_stats      = _spreadsheet.worksheet(SHEET_NAME_STATS)
 
 # ==========================================
 # 3. LOGGING
@@ -200,7 +199,7 @@ def refresh_guest_token():
         raise ValueError("No guest_token returned from X API.")
     os.environ["X_GUEST_TOKEN"] = new_token
     setup_guest_token(new_token)
-    log_info(f"[AUTH] New guest token: {new_token}")
+    log_info("[AUTH] New guest token acquired.")
 
 # --- Bootstrap auth on import ---
 _X_GUEST_TOKEN = os.getenv("X_GUEST_TOKEN", "")
@@ -229,10 +228,14 @@ def _compute_rate_limit_sleep(resp: requests.Response, attempt: int,
             return max(1, int(float(retry_after)))
         except Exception:
             pass
-    return min(300, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+    return _backoff_sleep(attempt, base_sleep, cap=300)
+
+def _backoff_sleep(attempt: int, base_sleep: float, cap: float = 60) -> float:
+    return min(cap, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
 
 def call_x_with_backoff(url: str, *, params=None, max_retries=DEFAULT_MAX_RETRIES,
-                         base_sleep=DEFAULT_BASE_SLEEP, row_idx=None) -> requests.Response:
+                         base_sleep=DEFAULT_BASE_SLEEP, row_idx=None,
+                         tag: str = ENDPOINT_TAG) -> requests.Response:
     """GET *url* with exponential back-off, auth-refresh, and rate-limit handling."""
     for attempt in range(1, max_retries + 2):
         try:
@@ -241,7 +244,7 @@ def call_x_with_backoff(url: str, *, params=None, max_retries=DEFAULT_MAX_RETRIE
             ms     = resp.elapsed.total_seconds() * 1000
 
             log_info(
-                f"[NET] GET {ENDPOINT_TAG} | "
+                f"[NET] GET {tag} | "
                 f"Row \033[33m{row_idx}\033[0m "
                 f"(Compiled in : \033[90m{ms:.0f}ms\033[0m)"
             )
@@ -271,7 +274,7 @@ def call_x_with_backoff(url: str, *, params=None, max_retries=DEFAULT_MAX_RETRIE
                 continue
 
             if attempt <= max_retries and status in _RETRYABLE_SERVER_CODES:
-                sleep_s = min(60, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+                sleep_s = _backoff_sleep(attempt, base_sleep)
                 log_error(f"[NET] Server error {status}, retrying in {sleep_s:.1f}s... ({attempt}/{max_retries})")
                 time.sleep(sleep_s)
             else:
@@ -280,7 +283,7 @@ def call_x_with_backoff(url: str, *, params=None, max_retries=DEFAULT_MAX_RETRIE
         except requests.exceptions.Timeout:
             if attempt > max_retries:
                 raise
-            sleep_s = min(60, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+            sleep_s = _backoff_sleep(attempt, base_sleep)
             log_error(f"[NET] Timeout, retrying in {sleep_s:.1f}s... ({attempt}/{max_retries})")
             time.sleep(sleep_s)
 
@@ -290,11 +293,16 @@ def call_x_with_backoff(url: str, *, params=None, max_retries=DEFAULT_MAX_RETRIE
         except Exception as e:
             if attempt > max_retries:
                 raise
-            sleep_s = min(60, base_sleep * (2 ** (attempt - 1))) + random.uniform(0, 1.0)
+            sleep_s = _backoff_sleep(attempt, base_sleep)
             log_error(f"[NET] Error {e!s}, retrying in {sleep_s:.1f}s... ({attempt}/{max_retries})")
             time.sleep(sleep_s)
 
     raise RuntimeError("Unreachable")
+
+def build_graphql_url(query_id: str, operation: str, **params: dict) -> str:
+    """Build an X GraphQL GET URL; each kwarg is JSON-encoded as a query param."""
+    qs = "&".join(f"{k}={requests.utils.quote(json.dumps(v))}" for k, v in params.items())
+    return f"{GRAPHQL_BASE}/{query_id}/{operation}?{qs}"
 
 # ==========================================
 # 7. COMMUNITY QUERY API
@@ -321,35 +329,128 @@ def fetch_community_member_count(rest_id: str, row_idx: Optional[int] = None) ->
     Returns:
         ``(http_status, member_count)``.  *member_count* is ``-1`` on failure.
     """
-    url = (
-        f"{GRAPHQL_BASE}/{COMMUNITY_QUERY_ID}/CommunityQuery?"
-        f"variables={requests.utils.quote(json.dumps({'communityId': rest_id}))}"
-        f"&features={requests.utils.quote(json.dumps(COMMUNITY_QUERY_FEATURES))}"
-    )
+    url = build_graphql_url(COMMUNITY_QUERY_ID, "CommunityQuery",
+                            variables={"communityId": rest_id},
+                            features=COMMUNITY_QUERY_FEATURES)
+    try:
+        resp = call_x_with_backoff(url, row_idx=row_idx, max_retries=3, tag="CommunityQuery")
+    except RuntimeError as e:
+        log_error(f"[NET] CommunityQuery failed for community={rest_id}: {e!s}")
+        return 403, -1
 
-    global ENDPOINT_TAG
-    old_tag = ENDPOINT_TAG
-    ENDPOINT_TAG = "CommunityQuery"
+    if resp.status_code != 200:
+        return resp.status_code, -1
+    data = resp.json()
+    member_count = data.get("data", {}).get("community", {}).get("member_count")
+    if not isinstance(member_count, int):
+        member_count = _deep_find_member_count(data) or -1
+    return 200, member_count
+
+def fetch_user_by_screen_name(screen_name: str, row_idx: Optional[int] = None,
+                              features: Optional[dict] = None) -> Tuple[int, Optional[dict]]:
+    """Call X GraphQL UserByScreenName. Returns ``(http_status, legacy_or_None)``."""
+    url = build_graphql_url(
+        USER_BY_SCREEN_NAME_ID, "UserByScreenName",
+        variables={"screen_name": screen_name, "withGrokTranslatedBio": False},
+        features=features or {"hidden_profile_subscriptions_enabled": True},
+        fieldToggles={"withAuxiliaryUserLabels": True},
+    )
+    resp = call_x_with_backoff(url, row_idx=row_idx, tag=screen_name)
+    if resp.status_code != 200:
+        return resp.status_code, None
+    return 200, resp.json().get("data", {}).get("user", {}).get("result", {}).get("legacy")
+
+# ==========================================
+# 8. SHARED ENGAGEMENT PIPELINE HELPERS
+# ==========================================
+ENGAGEMENT_RANGE       = "B6:G"
+ENGAGEMENT_START_ROW   = 6
+ENGAGEMENT_COL_COUNT   = 6            # B..G = 6 columns
+IDENTIFIER_COL         = 4            # Column F (0-indexed from B)
+LINK_COL               = 5            # Column G (0-indexed from B)
+MAX_CONSECUTIVE_ERRORS = 5
+ANTI_BAN_DELAY         = (5.0, 10.0)
+ERROR_LOG_SHEET        = "error.log"
+RATE_LIMITED_SHEET     = "Rate_Limited"
+
+def now_str() -> str:
+    return datetime.now(SGT).strftime("%Y-%m-%d %H:%M:%S")
+
+def polite_sleep(delay: Tuple[float, float] = ANTI_BAN_DELAY):
+    """Randomised pause between requests so traffic doesn't look machine-regular."""
+    time.sleep(random.uniform(*delay))
+
+def load_engagement_rows() -> List[Tuple[int, List[str]]]:
+    """Read engagement sheet and return list of (row_idx, padded_row_data)."""
+    raw = sheet_engagement.get(ENGAGEMENT_RANGE)
+    return [
+        (row_idx, row + [""] * (ENGAGEMENT_COL_COUNT - len(row)))
+        for row_idx, row in enumerate(raw, start=ENGAGEMENT_START_ROW)
+    ]
+
+def resolve_identifier(row_data: List[str]) -> str:
+    """Username / community ID from Column F, falling back to the Column G link."""
+    ident = row_data[IDENTIFIER_COL].strip().lstrip("@")
+    if not ident:
+        ident = (extract_identifier_from_link(row_data[LINK_COL].strip()) or "").lstrip("@")
+    return ident
+
+def make_status_logger(noun: str):
+    """Build a ``log_http_status(status, context)`` function for *noun* (posts/profile)."""
+    status_map = {
+        200: (log_success, "\033[92m200\033[0m", f"Successfully fetched {noun}"),
+        403: (log_error,   "\033[91m403\033[0m", "Forbidden access"),
+        404: (log_error,   "\033[91m404\033[0m", "User not found"),
+        429: (log_warn,    "\033[93m429\033[0m", "Rate limit exceeded"),
+    }
+    def log_http_status(status: int, context: str = ""):
+        fn, code_fmt, msg = status_map.get(
+            status, (log_error, f"\033[91m{status}\033[0m", f"Error fetching {noun}")
+        )
+        fn(f"HTTP {code_fmt} | {msg}", context=context)
+    return log_http_status
+
+def error_entry(instance: str, msg: str) -> dict:
+    return {"ts": now_str(), "instance": instance, "msg": msg}
+
+def _merge_into_log_sheet(sheet_name: str, updates: Dict[str, Optional[dict]]):
+    """Merge *updates* into a Timestamp/Username/Instance/Message sheet (None = remove)."""
     try:
         try:
-            refresh_guest_token()
-        except Exception as e:
-            log_warn(f"[AUTH] Guest token refresh failed: {e!s}, trying with existing session...")
+            sheet = _spreadsheet.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            sheet = _spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=4)
 
-        try:
-            resp   = call_x_with_backoff(url, row_idx=row_idx, max_retries=3)
-            status = resp.status_code
-        except RuntimeError as e:
-            log_error(f"[NET] CommunityQuery failed for community={rest_id}: {e!s}")
-            return 403, -1
+        merged = {
+            r[1]: {"ts": r[0], "instance": r[2], "msg": r[3]}
+            for r in sheet.get_all_values()[1:]
+            if len(r) >= 4
+        }
+        for ident, err in updates.items():
+            if err is None:
+                merged.pop(ident, None)
+            else:
+                merged[ident] = err
 
-        if status == 200:
-            data = resp.json()
-            member_count = data.get("data", {}).get("community", {}).get("member_count")
-            if not isinstance(member_count, int):
-                member_count = _deep_find_member_count(data) or -1
-            return 200, member_count
+        sheet.clear()
+        if merged:
+            header = ["Timestamp", "Username", "Instance", "Error Message"]
+            rows = [header] + [[e["ts"], u, e["instance"], e["msg"]] for u, e in merged.items()]
+            sheet.update(values=rows, range_name="A1", value_input_option="RAW")
+        log_info(f"[SYNC] Updated '{sheet_name}' with {len(merged)} entries.")
+    except Exception as e:
+        log_error(f"[SYNC] Failed to update '{sheet_name}' sheet: {e!s}")
 
-        return status, -1
-    finally:
-        ENDPOINT_TAG = old_tag
+def _is_rate_limited(err: Optional[dict]) -> bool:
+    return bool(err) and err["msg"].startswith("HTTP 429")
+
+def sync_error_log(daily_errors: Dict[str, Optional[dict]]):
+    """Route today's results: HTTP 429 → Rate_Limited sheet, other errors → error.log.
+
+    Each identifier is removed from the sheet it doesn't belong to, so an account
+    only ever appears in one place (and disappears from both once it succeeds).
+    """
+    rate_limited = {k: (v if _is_rate_limited(v) else None) for k, v in daily_errors.items()}
+    errors       = {k: (None if _is_rate_limited(v) else v) for k, v in daily_errors.items()}
+    _merge_into_log_sheet(ERROR_LOG_SHEET, errors)
+    _merge_into_log_sheet(RATE_LIMITED_SHEET, rate_limited)

@@ -18,7 +18,7 @@ IDENTIFIER_COL      = 4            # Column F (0-indexed from B)
 LINK_COL             = 5            # Column G (0-indexed from B)
 MAX_CONSECUTIVE_ERRORS = 5
 ANTI_BAN_DELAY       = (5.0, 10.0)
-NITTER_INSTANCES     = ["nitter.pp.ua"]
+NITTER_INSTANCES     = ["shitter.thepixora.com"]
 DEFAULT_DAYS         = 30
 CHUNK_SIZE           = 500
 

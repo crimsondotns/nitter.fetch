@@ -18,7 +18,7 @@ IDENTIFIER_COL      = 4            # Column F (0-indexed from B)
 LINK_COL             = 5            # Column G (0-indexed from B)
 MAX_CONSECUTIVE_ERRORS = 5
 ANTI_BAN_DELAY       = (5.0, 10.0)
-NITTER_INSTANCES     = ["nitter.net"]
+NITTER_INSTANCES     = ["nitter.pp.ua"]
 DEFAULT_DAYS         = 30
 CHUNK_SIZE           = 500
 
@@ -62,7 +62,7 @@ def resolve_identifier(row_data: List[str]) -> str:
 # NITTER RSS FETCHER
 # ==========================================
 def fetch_recent_tweets_nitter(username: str, days: int = DEFAULT_DAYS) -> Tuple[int, List[Tuple[str, str]]]:
-    """Fetch recent tweets via Nitter RSS feed.
+    """Fetch recent tweets via Nitter  feed.
 
     Returns:
         (http_status, [(date_str, content), ...])
